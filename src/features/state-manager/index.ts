@@ -52,6 +52,7 @@ const MAX_STATE_AGE_MS = 4 * 60 * 60 * 1000;
 
 // Read cache: avoids re-reading unchanged state files within TTL
 const STATE_CACHE_TTL_MS = 5_000; // 5 seconds
+const MAX_CACHE_SIZE = 200;
 interface CacheEntry {
   data: unknown;
   mtime: number;
@@ -105,7 +106,9 @@ export function getLegacyPaths(name: string): string[] {
 export function ensureStateDir(location: StateLocation): void {
   const dir =
     location === StateLocation.LOCAL ? getLocalStateDir() : GLOBAL_STATE_DIR;
-  fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 }
 
 /**
@@ -124,56 +127,60 @@ export function readState<T = StateData>(
   const legacyPaths = checkLegacy ? getLegacyPaths(name) : [];
 
   // Try standard location first
-  try {
-    // Get mtime BEFORE reading to prevent TOCTOU cache poisoning.
-    // Previously mtime was read AFTER readFileSync, so a concurrent write
-    // between the two could cache stale data under the new mtime.
-    const statBefore = fs.statSync(standardPath);
-    const mtimeBefore = statBefore.mtimeMs;
+  if (fs.existsSync(standardPath)) {
+    try {
+      // Get mtime BEFORE reading to prevent TOCTOU cache poisoning.
+      // Previously mtime was read AFTER readFileSync, so a concurrent write
+      // between the two could cache stale data under the new mtime.
+      const statBefore = fs.statSync(standardPath);
+      const mtimeBefore = statBefore.mtimeMs;
 
-    // Check cache: entry exists, mtime matches, TTL not expired
-    const cached = stateCache.get(standardPath);
-    if (
-      cached &&
-      cached.mtime === mtimeBefore &&
-      Date.now() - cached.cachedAt < STATE_CACHE_TTL_MS
-    ) {
+      // Check cache: entry exists, mtime matches, TTL not expired
+      const cached = stateCache.get(standardPath);
+      if (
+        cached &&
+        cached.mtime === mtimeBefore &&
+        Date.now() - cached.cachedAt < STATE_CACHE_TTL_MS
+      ) {
+        return {
+          exists: true,
+          data: structuredClone(cached.data) as T,
+          foundAt: standardPath,
+          legacyLocations: [],
+        };
+      }
+
+      // Cache miss or stale — read from disk
+      const content = fs.readFileSync(standardPath, "utf-8");
+      const data = JSON.parse(content) as T;
+
+      // Verify mtime unchanged during read to prevent caching inconsistent data.
+      // If the file was modified between our statBefore and readFileSync, we still
+      // return the data but do NOT cache it — the next read will re-read from disk.
+      try {
+        const statAfter = fs.statSync(standardPath);
+        if (statAfter.mtimeMs === mtimeBefore) {
+          if (stateCache.size >= MAX_CACHE_SIZE) {
+            const firstKey = stateCache.keys().next().value;
+            if (firstKey !== undefined) stateCache.delete(firstKey);
+          }
+          stateCache.set(standardPath, {
+            data: structuredClone(data),
+            mtime: mtimeBefore,
+            cachedAt: Date.now(),
+          });
+        }
+      } catch {
+        // statSync failed — skip caching, data is still returned
+      }
+
       return {
         exists: true,
-        data: structuredClone(cached.data) as T,
+        data: structuredClone(data) as T,
         foundAt: standardPath,
         legacyLocations: [],
       };
-    }
-
-    // Cache miss or stale — read from disk
-    const content = fs.readFileSync(standardPath, "utf-8");
-    const data = JSON.parse(content) as T;
-
-    // Verify mtime unchanged during read to prevent caching inconsistent data.
-    // If the file was modified between our statBefore and readFileSync, we still
-    // return the data but do NOT cache it — the next read will re-read from disk.
-    try {
-      const statAfter = fs.statSync(standardPath);
-      if (statAfter.mtimeMs === mtimeBefore) {
-        stateCache.set(standardPath, {
-          data: structuredClone(data),
-          mtime: mtimeBefore,
-          cachedAt: Date.now(),
-        });
-      }
-    } catch {
-      // statSync failed — skip caching, data is still returned
-    }
-
-    return {
-      exists: true,
-      data: structuredClone(data) as T,
-      foundAt: standardPath,
-      legacyLocations: [],
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    } catch (error) {
       // Invalid JSON or read error - treat as not found
       console.warn(`Failed to read state from ${standardPath}:`, error);
     }
@@ -187,17 +194,17 @@ export function readState<T = StateData>(
         ? legacyPath
         : path.join(getWorktreeRoot() || process.cwd(), legacyPath);
 
-      try {
-        const content = fs.readFileSync(resolvedPath, "utf-8");
-        const data = JSON.parse(content) as T;
-        return {
-          exists: true,
-          data: structuredClone(data) as T,
-          foundAt: resolvedPath,
-          legacyLocations: legacyPaths,
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (fs.existsSync(resolvedPath)) {
+        try {
+          const content = fs.readFileSync(resolvedPath, "utf-8");
+          const data = JSON.parse(content) as T;
+          return {
+            exists: true,
+            data: structuredClone(data) as T,
+            foundAt: resolvedPath,
+            legacyLocations: legacyPaths,
+          };
+        } catch (error) {
           console.warn(
             `Failed to read legacy state from ${resolvedPath}:`,
             error,
@@ -285,17 +292,17 @@ export function clearState(
   for (const loc of locationsToCheck) {
     const standardPath = getStatePath(name, loc);
     try {
-      fs.unlinkSync(standardPath);
-      result.removed.push(standardPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        result.notFound.push(standardPath);
+      if (fs.existsSync(standardPath)) {
+        fs.unlinkSync(standardPath);
+        result.removed.push(standardPath);
       } else {
-        result.errors.push({
-          path: standardPath,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        result.notFound.push(standardPath);
       }
+    } catch (error) {
+      result.errors.push({
+        path: standardPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -307,17 +314,17 @@ export function clearState(
       : path.join(getWorktreeRoot() || process.cwd(), legacyPath);
 
     try {
-      fs.unlinkSync(resolvedPath);
-      result.removed.push(resolvedPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        result.notFound.push(resolvedPath);
+      if (fs.existsSync(resolvedPath)) {
+        fs.unlinkSync(resolvedPath);
+        result.removed.push(resolvedPath);
       } else {
-        result.errors.push({
-          path: resolvedPath,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        result.notFound.push(resolvedPath);
       }
+    } catch (error) {
+      result.errors.push({
+        path: resolvedPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

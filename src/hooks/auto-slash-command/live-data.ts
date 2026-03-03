@@ -22,6 +22,8 @@ import { getWorktreeRoot, getOmcRoot } from "../../lib/worktree-paths.js";
 
 const TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_BYTES = 50 * 1024;
+const MAX_CACHE_SIZE = 200;
+const MAX_ONCE_COMMANDS = 500;
 
 // Pre-compiled regex patterns for performance
 const LIVE_DATA_LINE_PATTERN = /^\s*!(.+)/;
@@ -98,7 +100,26 @@ function setCache(
   ttl: number,
 ): void {
   if (ttl <= 0) return;
+
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey !== undefined) cache.delete(firstKey);
+  }
+
   cache.set(command, { output, error, cachedAt: Date.now(), ttl });
+}
+
+function markCommandExecuted(command: string): void {
+  if (onceCommands.has(command)) {
+    return;
+  }
+
+  if (onceCommands.size >= MAX_ONCE_COMMANDS) {
+    const firstKey = onceCommands.values().next().value;
+    if (firstKey !== undefined) onceCommands.delete(firstKey);
+  }
+
+  onceCommands.add(command);
 }
 
 /** Clear all caches (useful for testing) */
@@ -575,7 +596,7 @@ export function resolveLiveData(content: string): string {
             `<live-data command="${escapeHtml(directive.command)}" skipped="true">already executed this session</live-data>`,
           );
         } else {
-          onceCommands.add(directive.command);
+          markCommandExecuted(directive.command);
           const { stdout, error } = executeCommand(directive.command);
           result.push(formatOutput(directive.command, stdout, error, null));
         }
