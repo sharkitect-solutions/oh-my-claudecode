@@ -32,6 +32,16 @@ _Don't learn Claude Code. Just use OMC._
 | --- | --- |
 | Sigrid Jin | [@sigridjineth](https://github.com/sigridjineth) |
 
+## Top Collaborators
+
+| Name | GitHub |
+| --- | --- |
+| chltlgns | [@chltlgns](https://github.com/chltlgns) |
+| riftzen-bit | [@riftzen-bit](https://github.com/riftzen-bit) |
+| Seunggwan Song | [@nathan-song](https://github.com/nathan-song) |
+| JunghwanNA | [@shaun0927](https://github.com/shaun0927) |
+| devswha | [@devswha](https://github.com/devswha) |
+
 ## Quick Start
 
 **Step 1: Install**
