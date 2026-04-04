@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -229,7 +230,7 @@ Use the real docs file.
     expect(`${result.stdout}\n${result.stderr}`).toContain('Plugin verified');
   });
 
-  it('preserves an existing global CLAUDE.md by installing OMC into a companion file', () => {
+  it('overwrites an existing global CLAUDE.md by default when preserve mode is not requested', () => {
     const fixture = createPluginFixture(`<!-- OMC:START -->
 <!-- OMC:VERSION:9.9.9 -->
 
@@ -244,6 +245,40 @@ Use the real docs file.
     writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
 
     const result = spawnSync('bash', [fixture.scriptPath, 'global'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+
+    const baseClaude = readFileSync(join(configDir, 'CLAUDE.md'), 'utf-8');
+    expect(baseClaude).toContain('<!-- OMC:START -->');
+    expect(baseClaude).toContain('<!-- OMC:END -->');
+    expect(baseClaude).toContain('<!-- User customizations (migrated from previous CLAUDE.md) -->');
+    expect(baseClaude).toContain('# User CLAUDE');
+    expect(existsSync(join(configDir, 'CLAUDE-omc.md'))).toBe(false);
+  });
+
+  it('preserves an existing global CLAUDE.md when preserve mode is explicitly requested', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE.md'), '# User CLAUDE\nKeep my base config.\n');
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'global', 'preserve'], {
       cwd: fixture.projectRoot,
       env: {
         ...process.env,
@@ -271,7 +306,7 @@ Use the real docs file.
     expect(companionClaude).toContain('# Canonical CLAUDE');
   });
 
-  it('updates the companion file idempotently without duplicating the managed import block', () => {
+  it('updates the preserved companion file idempotently without duplicating the managed import block', () => {
     const fixture = createPluginFixture(`<!-- OMC:START -->
 <!-- OMC:VERSION:9.9.9 -->
 
@@ -291,14 +326,14 @@ Use the real docs file.
       CLAUDE_CONFIG_DIR: configDir,
     };
 
-    const first = spawnSync('bash', [fixture.scriptPath, 'global'], {
+    const first = spawnSync('bash', [fixture.scriptPath, 'global', 'preserve'], {
       cwd: fixture.projectRoot,
       env,
       encoding: 'utf-8',
     });
     expect(first.status).toBe(0);
 
-    const second = spawnSync('bash', [fixture.scriptPath, 'global'], {
+    const second = spawnSync('bash', [fixture.scriptPath, 'global', 'preserve'], {
       cwd: fixture.projectRoot,
       env,
       encoding: 'utf-8',
@@ -309,6 +344,39 @@ Use the real docs file.
     expect(baseClaude.match(/<!-- OMC:IMPORT:START -->/g)).toHaveLength(1);
     expect(baseClaude.match(/@CLAUDE-omc\.md/g)).toHaveLength(1);
     expect(readFileSync(join(configDir, 'CLAUDE-omc.md'), 'utf-8')).toContain('<!-- OMC:VERSION:9.9.9 -->');
+  });
+
+  it('refuses preserve mode when the companion path is a symlink', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE.md'), '# User CLAUDE\nKeep my base config.\n');
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ plugins: ['oh-my-claudecode'] }));
+
+    const realTarget = join(fixture.homeRoot, 'outside-target.md');
+    writeFileSync(realTarget, 'outside target');
+    symlinkSync(realTarget, join(configDir, 'CLAUDE-omc.md'));
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'global', 'preserve'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('Refusing to write OMC companion CLAUDE.md');
+    expect(readFileSync(realTarget, 'utf-8')).toBe('outside target');
   });
 });
 

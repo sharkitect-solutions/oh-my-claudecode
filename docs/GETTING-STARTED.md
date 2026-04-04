@@ -85,7 +85,7 @@ Applies OMC to all Claude Code sessions:
 - Settings are saved to `~/.claude/CLAUDE.md`
 - Applied across all projects
 
-> ⚠️ **Warning:** Global setup overwrites the existing `~/.claude/CLAUDE.md` file. If you already have configuration there, use project-scoped setup (`--local`) instead.
+> ⚠️ **Warning:** Global setup now asks explicitly before changing your base `~/.claude/CLAUDE.md`. The default choice is still overwrite. If you choose preserve mode instead, plain `claude` stays on your base config and `omc` force-loads the OMC companion config.
 
 ### Verifying the installation
 

@@ -8,6 +8,9 @@
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -26,7 +29,7 @@ vi.mock('../tmux-utils.js', () => ({
   isClaudeAvailable: vi.fn(() => true),
 }));
 
-import { runClaude, launchCommand, extractNotifyFlag, extractOpenClawFlag, extractTelegramFlag, extractDiscordFlag, extractSlackFlag, extractWebhookFlag, normalizeClaudeLaunchArgs, isPrintMode } from '../launch.js';
+import { runClaude, launchCommand, extractNotifyFlag, extractOpenClawFlag, extractTelegramFlag, extractDiscordFlag, extractSlackFlag, extractWebhookFlag, normalizeClaudeLaunchArgs, isPrintMode, prepareOmcLaunchConfigDir } from '../launch.js';
 import {
   resolveLaunchPolicy,
   buildTmuxShellCommand,
@@ -806,6 +809,58 @@ describe('launchCommand — env var propagation', () => {
     expect(claudeArgs).not.toContain('--webhook');
     expect(claudeArgs).not.toContain('--openclaw');
     expect(claudeArgs).toContain('--print');
+  });
+});
+
+describe('prepareOmcLaunchConfigDir / launchCommand OMC companion loading', () => {
+  const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  let tempRoot: string | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    tempRoot = mkdtempSync(join(tmpdir(), 'omc-launch-profile-'));
+    (execFileSync as ReturnType<typeof vi.fn>).mockReturnValue(Buffer.from(''));
+    (resolveLaunchPolicy as ReturnType<typeof vi.fn>).mockReturnValue('direct');
+  });
+
+  afterEach(() => {
+    if (tempRoot) {
+      rmSync(tempRoot, { recursive: true, force: true });
+      tempRoot = null;
+    }
+    if (originalClaudeConfigDir === undefined) {
+      delete process.env.CLAUDE_CONFIG_DIR;
+    } else {
+      process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+    }
+  });
+
+  it('uses a runtime launch profile when a preserved CLAUDE-omc.md companion exists', async () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(join(configDir, 'skills'), { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE.md'), '# User base config\n');
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC companion\n<!-- OMC:END -->\n');
+    writeFileSync(join(configDir, 'settings.json'), '{"hooks":{}}');
+
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+
+    await launchCommand(['--print']);
+
+    const runtimeDir = join(configDir, '.omc-launch');
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(runtimeDir);
+    expect(existsSync(join(runtimeDir, 'CLAUDE.md'))).toBe(true);
+    expect(readFileSync(join(runtimeDir, 'CLAUDE.md'), 'utf-8')).toContain('# OMC companion');
+    expect(readFileSync(join(configDir, 'CLAUDE.md'), 'utf-8')).toBe('# User base config\n');
+    expect(existsSync(join(runtimeDir, 'settings.json'))).toBe(true);
+  });
+
+  it('leaves CLAUDE_CONFIG_DIR unchanged when no preserved companion exists', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE.md'), '<!-- OMC:START -->\n# OMC base\n<!-- OMC:END -->\n');
+
+    expect(prepareOmcLaunchConfigDir(configDir)).toBe(configDir);
+    expect(existsSync(join(configDir, '.omc-launch'))).toBe(false);
   });
 });
 

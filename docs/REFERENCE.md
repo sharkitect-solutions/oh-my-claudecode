@@ -74,7 +74,8 @@ Configure omc for all Claude Code sessions:
 
 - Creates `~/.claude/CLAUDE.md` globally
 - Configuration applies to all projects
-- **Warning**: Completely overwrites existing `~/.claude/CLAUDE.md`
+- **Default**: explicitly overwrites existing `~/.claude/CLAUDE.md`
+- **Optional preserve mode**: keeps the base file, writes OMC to `~/.claude/CLAUDE-omc.md`, and lets `omc` force-load that companion config at launch while plain `claude` stays unchanged
 
 ### What Configuration Enables
 

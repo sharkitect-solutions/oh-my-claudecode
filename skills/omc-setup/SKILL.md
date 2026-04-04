@@ -62,7 +62,8 @@ MODES:
   Global Configuration (--global)
     - Downloads fresh CLAUDE.md to ~/.claude/
     - Backs up existing CLAUDE.md to ~/.claude/CLAUDE.md.backup.YYYY-MM-DD
-    - Preserves an existing user-authored base CLAUDE.md via a companion `CLAUDE-omc.md` import when possible
+    - Default: explicitly overwrites ~/.claude/CLAUDE.md so plain `claude` also uses OMC
+    - Optional preserve mode keeps the user's base `CLAUDE.md` and installs OMC into `CLAUDE-omc.md` for `omc` launches
     - Applies to all Claude Code sessions
     - Cleans up legacy hooks
     - Use this to update global config after OMC upgrades

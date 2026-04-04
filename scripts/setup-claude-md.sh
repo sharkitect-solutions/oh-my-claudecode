@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # setup-claude-md.sh - Unified CLAUDE.md download/merge script
-# Usage: setup-claude-md.sh <local|global>
+# Usage: setup-claude-md.sh <local|global> [overwrite|preserve]
 #
 # Handles: version extraction, backup, download, marker stripping, merge, version reporting.
-# For global mode, preserves existing base CLAUDE.md via a companion import when possible.
+# For global mode, defaults to overwrite; preserve mode keeps the user's base
+# CLAUDE.md and writes OMC content to a companion file for `omc` launch.
 
 set -euo pipefail
 
-MODE="${1:?Usage: setup-claude-md.sh <local|global>}"
+MODE="${1:?Usage: setup-claude-md.sh <local|global> [overwrite|preserve]}"
+INSTALL_STYLE="${2:-overwrite}"
 DOWNLOAD_URL="https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/docs/CLAUDE.md"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -101,6 +103,11 @@ else
   exit 1
 fi
 
+if [ "$INSTALL_STYLE" != "overwrite" ] && [ "$INSTALL_STYLE" != "preserve" ]; then
+  echo "ERROR: Invalid install style '$INSTALL_STYLE'. Use 'overwrite' or 'preserve'." >&2
+  exit 1
+fi
+
 
 install_omc_reference_skill() {
   local source_label=""
@@ -190,6 +197,16 @@ EOF
   fi
 }
 
+ensure_not_symlink_path() {
+  local target_path="$1"
+  local label="$2"
+
+  if [ -L "$target_path" ]; then
+    echo "ERROR: Refusing to write $label because the destination is a symlink: $target_path" >&2
+    exit 1
+  fi
+}
+
 VALIDATION_PATH="$TARGET_PATH"
 
 SOURCE_LABEL=""
@@ -265,8 +282,10 @@ else
     mv "${TARGET_PATH}.tmp" "$TARGET_PATH"
     rm -f "${TARGET_PATH}.preserved"
     echo "Updated OMC section (user customizations preserved)"
-  elif [ "$MODE" = "global" ]; then
+  elif [ "$MODE" = "global" ] && [ "$INSTALL_STYLE" = "preserve" ]; then
     COMPANION_TARGET_PATH="$CONFIG_DIR/$COMPANION_FILENAME"
+    ensure_not_symlink_path "$COMPANION_TARGET_PATH" "OMC companion CLAUDE.md"
+    ensure_not_symlink_path "$TARGET_PATH" "base CLAUDE.md import block"
     if [ -f "$COMPANION_TARGET_PATH" ] && [ -n "$BACKUP_DATE" ]; then
       cp "$COMPANION_TARGET_PATH" "${COMPANION_TARGET_PATH}.backup.${BACKUP_DATE}"
       echo "Backed up existing companion CLAUDE.md to ${COMPANION_TARGET_PATH}.backup.${BACKUP_DATE}"
