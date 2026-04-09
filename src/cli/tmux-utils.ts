@@ -3,8 +3,97 @@
  * Adapted from oh-my-codex patterns for omc
  */
 
-import { execFileSync } from 'child_process';
+import {
+  exec,
+  execFile,
+  execFileSync,
+  execSync,
+  spawnSync,
+  type ExecFileSyncOptionsWithStringEncoding,
+  type ExecSyncOptionsWithStringEncoding,
+  type SpawnSyncOptionsWithStringEncoding,
+  type SpawnSyncReturns,
+} from 'child_process';
 import { basename } from 'path';
+import { promisify } from 'util';
+
+const promisifiedExec = promisify(exec);
+const promisifiedExecFile = promisify(execFile);
+
+// ── tmux environment & execution wrappers ────────────────────────────────────
+
+export interface TmuxExecOptions {
+  /** Strip TMUX env var so the command targets the default tmux server.
+   *  Default: false — preserves TMUX (targets the current server).
+   *  Set to true for OMC-owned background sessions and cross-session scans. */
+  stripTmux?: boolean;
+}
+
+export function tmuxEnv(): NodeJS.ProcessEnv {
+  const { TMUX: _, ...env } = process.env;
+  return env;
+}
+
+function resolveEnv(opts?: TmuxExecOptions): NodeJS.ProcessEnv {
+  return opts?.stripTmux ? tmuxEnv() : process.env;
+}
+
+export function tmuxExec(
+  args: string[],
+  opts?: TmuxExecOptions & Omit<ExecFileSyncOptionsWithStringEncoding, 'env' | 'encoding'> & { encoding?: BufferEncoding },
+): string {
+  const { stripTmux: _, ...execOpts } = opts ?? {};
+  return execFileSync('tmux', args, { encoding: 'utf-8', ...execOpts, env: resolveEnv(opts) });
+}
+
+export async function tmuxExecAsync(
+  args: string[],
+  opts?: TmuxExecOptions & { timeout?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  const { stripTmux: _, timeout, ...rest } = opts ?? {};
+  return promisifiedExecFile('tmux', args, {
+    encoding: 'utf-8', env: resolveEnv(opts),
+    ...(timeout !== undefined ? { timeout } : {}), ...rest,
+  });
+}
+
+export function tmuxShell(
+  command: string,
+  opts?: TmuxExecOptions & Omit<ExecSyncOptionsWithStringEncoding, 'env' | 'encoding'> & { encoding?: BufferEncoding },
+): string {
+  const { stripTmux: _, ...execOpts } = opts ?? {};
+  return execSync(`tmux ${command}`, { encoding: 'utf-8', ...execOpts, env: resolveEnv(opts) }) as string;
+}
+
+export async function tmuxShellAsync(
+  command: string,
+  opts?: TmuxExecOptions & { timeout?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  const { stripTmux: _, timeout, ...rest } = opts ?? {};
+  return promisifiedExec(`tmux ${command}`, {
+    encoding: 'utf-8', env: resolveEnv(opts),
+    ...(timeout !== undefined ? { timeout } : {}), ...rest,
+  });
+}
+
+export function tmuxSpawn(
+  args: string[],
+  opts?: TmuxExecOptions & Omit<SpawnSyncOptionsWithStringEncoding, 'env' | 'encoding'> & { encoding?: BufferEncoding },
+): SpawnSyncReturns<string> {
+  const { stripTmux: _, ...spawnOpts } = opts ?? {};
+  return spawnSync('tmux', args, { encoding: 'utf-8', ...spawnOpts, env: resolveEnv(opts) });
+}
+
+export async function tmuxCmdAsync(
+  args: string[],
+  opts?: TmuxExecOptions & { timeout?: number },
+): Promise<{ stdout: string; stderr: string }> {
+  if (args.some(a => a.includes('#{'))) {
+    const escaped = args.map(a => "'" + a.replace(/'/g, "'\\''") + "'").join(' ');
+    return tmuxShellAsync(escaped, opts);
+  }
+  return tmuxExecAsync(args, opts);
+}
 
 export type ClaudeLaunchPolicy = 'inside-tmux' | 'outside-tmux' | 'direct';
 
@@ -19,7 +108,7 @@ export interface TmuxPaneSnapshot {
  */
 export function isTmuxAvailable(): boolean {
   try {
-    execFileSync('tmux', ['-V'], { stdio: 'ignore' });
+    tmuxExec(['-V'], { stripTmux: true, stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -191,10 +280,8 @@ export function findHudWatchPaneIds(panes: TmuxPaneSnapshot[], currentPaneId?: s
  */
 export function listHudWatchPaneIdsInCurrentWindow(currentPaneId?: string): string[] {
   try {
-    const output = execFileSync(
-      'tmux',
+    const output = tmuxExec(
       ['list-panes', '-F', '#{pane_id}\t#{pane_current_command}\t#{pane_start_command}'],
-      { encoding: 'utf-8' }
     );
     return findHudWatchPaneIds(parseTmuxPaneSnapshot(output), currentPaneId);
   } catch {
@@ -209,10 +296,8 @@ export function listHudWatchPaneIdsInCurrentWindow(currentPaneId?: string): stri
 export function createHudWatchPane(cwd: string, hudCmd: string): string | null {
   try {
     const wrappedCmd = wrapWithLoginShell(hudCmd);
-    const output = execFileSync(
-      'tmux',
+    const output = tmuxExec(
       ['split-window', '-v', '-l', '4', '-d', '-c', cwd, '-P', '-F', '#{pane_id}', wrappedCmd],
-      { encoding: 'utf-8' }
     );
     const paneId = output.split('\n')[0]?.trim() || '';
     return paneId.startsWith('%') ? paneId : null;
@@ -227,7 +312,7 @@ export function createHudWatchPane(cwd: string, hudCmd: string): string | null {
 export function killTmuxPane(paneId: string): void {
   if (!paneId.startsWith('%')) return;
   try {
-    execFileSync('tmux', ['kill-pane', '-t', paneId], { stdio: 'ignore' });
+    tmuxExec(['kill-pane', '-t', paneId], { stripTmux: true, stdio: 'ignore' });
   } catch {
     // Pane may already be gone; ignore
   }

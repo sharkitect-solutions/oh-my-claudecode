@@ -12,7 +12,7 @@
 
 import { resolve } from 'path';
 import { mkdir } from 'fs/promises';
-import { execFileSync, spawnSync } from 'child_process';
+import { tmuxExec, tmuxSpawn } from '../cli/tmux-utils.js';
 import {
   teamReadConfig,
   teamWriteWorkerIdentity,
@@ -126,14 +126,14 @@ export async function scaleUp(
         }
         try {
           if (w.pane_id) {
-            execFileSync('tmux', ['kill-pane', '-t', w.pane_id], { stdio: 'pipe' });
+            tmuxExec(['kill-pane', '-t', w.pane_id], { stdio: 'pipe' });
           }
         } catch { /* best-effort pane cleanup */ }
       }
 
       if (paneId) {
         try {
-          execFileSync('tmux', ['kill-pane', '-t', paneId], { stdio: 'pipe' });
+          tmuxExec(['kill-pane', '-t', paneId], { stdio: 'pipe' });
         } catch { /* best-effort pane cleanup */ }
       }
 
@@ -198,9 +198,9 @@ export async function scaleUp(
         : (config.leader_pane_id ?? '');
       const splitDirection = splitTarget === (config.leader_pane_id ?? '') ? '-h' : '-v';
 
-      const result = spawnSync('tmux', [
+      const result = tmuxSpawn([
         'split-window', splitDirection, '-t', splitTarget, '-d', '-P', '-F', '#{pane_id}', '-c', leaderCwd, cmd,
-      ], { encoding: 'utf-8' });
+      ]);
 
       if (result.status !== 0) {
         return await rollbackScaleUp(`Failed to create tmux pane for ${workerName}: ${(result.stderr || '').trim()}`);
@@ -214,7 +214,7 @@ export async function scaleUp(
       // Get PID
       let panePid: number | undefined;
       try {
-        const pidResult = spawnSync('tmux', ['display-message', '-t', paneId, '-p', '#{pane_pid}'], { encoding: 'utf-8' });
+        const pidResult = tmuxSpawn(['display-message', '-t', paneId, '-p', '#{pane_pid}']);
         const pidStr = (pidResult.stdout || '').trim();
         const parsed = Number.parseInt(pidStr, 10);
         if (Number.isFinite(parsed)) panePid = parsed;

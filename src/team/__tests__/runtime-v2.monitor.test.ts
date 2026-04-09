@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 const mocks = vi.hoisted(() => ({
   isWorkerAlive: vi.fn(async () => true),
   execFile: vi.fn(),
+  tmuxExecAsync: vi.fn(),
 }));
 
 vi.mock('child_process', async (importOriginal) => {
@@ -13,6 +14,14 @@ vi.mock('child_process', async (importOriginal) => {
   return {
     ...actual,
     execFile: mocks.execFile,
+  };
+});
+
+vi.mock('../../cli/tmux-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../cli/tmux-utils.js')>();
+  return {
+    ...actual,
+    tmuxExecAsync: mocks.tmuxExecAsync,
   };
 });
 
@@ -31,6 +40,7 @@ describe('monitorTeamV2 pane-based stall inference', () => {
     vi.resetModules();
     mocks.isWorkerAlive.mockReset();
     mocks.execFile.mockReset();
+    mocks.tmuxExecAsync.mockReset();
     mocks.isWorkerAlive.mockResolvedValue(true);
     mocks.execFile.mockImplementation((_cmd: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
       if (args[0] === 'capture-pane') {
@@ -38,6 +48,12 @@ describe('monitorTeamV2 pane-based stall inference', () => {
         return;
       }
       cb(null, '', '');
+    });
+    mocks.tmuxExecAsync.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'capture-pane') {
+        return { stdout: '> \n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
     });
   });
 
@@ -107,6 +123,12 @@ describe('monitorTeamV2 pane-based stall inference', () => {
       }
       cb(null, '', '');
     });
+    mocks.tmuxExecAsync.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'capture-pane') {
+        return { stdout: 'Working on task...\n  esc to interrupt\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
+    });
 
     const { monitorTeamV2 } = await import('../runtime-v2.js');
     const snapshot = await monitorTeamV2('demo-team', cwd);
@@ -123,6 +145,12 @@ describe('monitorTeamV2 pane-based stall inference', () => {
         return;
       }
       cb(null, '', '');
+    });
+    mocks.tmuxExecAsync.mockImplementation(async (args: string[]) => {
+      if (args[0] === 'capture-pane') {
+        return { stdout: 'model: loading\ngpt-5.3-codex high · 80% left\n', stderr: '' };
+      }
+      return { stdout: '', stderr: '' };
     });
 
     const { monitorTeamV2 } = await import('../runtime-v2.js');

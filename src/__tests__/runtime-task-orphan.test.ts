@@ -11,13 +11,11 @@ import { tmpdir } from 'os';
 
 // --- Mocks ---
 
-const mockExecFileAsync = vi.fn();
+const mockTmuxExecAsync = vi.fn();
 
-vi.mock('child_process', () => {
-  const execFile = Object.assign(vi.fn(), {
-    [Symbol.for('nodejs.util.promisify.custom')]: mockExecFileAsync,
-  });
-  return { execFile };
+vi.mock('../cli/tmux-utils.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../cli/tmux-utils.js')>();
+  return { ...actual, tmuxExecAsync: mockTmuxExecAsync };
 });
 
 vi.mock('../team/model-contract.js', () => ({
@@ -61,7 +59,7 @@ describe('spawnWorkerForTask task orphan prevention', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'runtime-task-orphan-'));
-    mockExecFileAsync.mockReset();
+    mockTmuxExecAsync.mockReset();
   });
 
   afterEach(() => {
@@ -89,7 +87,7 @@ describe('spawnWorkerForTask task orphan prevention', () => {
     }));
 
     // Mock tmux split-window to return empty stdout (pane creation failure)
-    mockExecFileAsync.mockResolvedValue({ stdout: '\n', stderr: '' });
+    mockTmuxExecAsync.mockResolvedValue({ stdout: '\n', stderr: '' });
 
     const runtime = {
       teamName,
