@@ -52,6 +52,7 @@ import { readTeamPipelineState } from '../team-pipeline/state.js';
 import type { TeamPipelinePhase } from '../team-pipeline/types.js';
 import { getActiveAgentSnapshot } from '../subagent-tracker/index.js';
 import type { IdleNotificationRepoState } from './idle-repo-state.js';
+import { truncatePromptForEcho } from '../../lib/truncate-prompt.js';
 
 export interface ToolErrorState {
   tool_name: string;
@@ -845,7 +846,7 @@ ${prdInstruction}
 4. When FULLY complete (after ${state.critic_mode === 'codex' ? 'Codex critic' : state.critic_mode === 'critic' ? 'Critic' : 'Architect'} verification), run \`/oh-my-claudecode:cancel\` to cleanly exit and clean up state files. If cancel fails, retry with \`/oh-my-claudecode:cancel --force\`.
 5. Do NOT stop until the task is truly done
 
-${newState.prompt ? `Original task: ${newState.prompt}` : ''}
+${newState.prompt ? `Original task: ${truncatePromptForEcho(newState.prompt)}` : ''}
 
 </ralph-continuation>
 
