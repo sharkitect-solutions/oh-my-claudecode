@@ -1,17 +1,30 @@
-import { execSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const SCRIPT_PATH = join(process.cwd(), 'scripts', 'context-guard-stop.mjs');
 
 function runContextGuardStop(input: Record<string, unknown>): Record<string, unknown> {
-  const stdout = execSync(`node "${SCRIPT_PATH}"`, {
+  const stdout = execFileSync(process.execPath, [SCRIPT_PATH], {
     input: JSON.stringify(input),
     encoding: 'utf-8',
     timeout: 5000,
     env: { ...process.env, NODE_ENV: 'test' },
+  });
+  return JSON.parse(stdout.trim()) as Record<string, unknown>;
+}
+
+function runContextGuardStopWithEnv(
+  input: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): Record<string, unknown> {
+  const stdout = execFileSync(process.execPath, [SCRIPT_PATH], {
+    input: JSON.stringify(input),
+    encoding: 'utf-8',
+    timeout: 5000,
+    env: { ...process.env, NODE_ENV: 'test', ...env },
   });
   return JSON.parse(stdout.trim()) as Record<string, unknown>;
 }
@@ -89,5 +102,40 @@ describe('context-guard-stop safe recovery messaging (issue #1373)', () => {
     expect(second.decision).toBe('block');
     expect(String(first.reason)).toContain('(Block 1/2)');
     expect(String(second.reason)).toContain('(Block 1/2)');
+  });
+
+  it('skips git worktree probing in non-git directories without a local .git marker', () => {
+    const missingTranscriptPath = join(tempDir, 'missing-transcript.jsonl');
+    const fakeBinDir = join(tempDir, 'fake-bin');
+    mkdirSync(fakeBinDir, { recursive: true });
+    const gitLogPath = join(tempDir, 'git-invocations.log');
+
+    writeFileSync(
+      join(fakeBinDir, 'git'),
+      '#!/usr/bin/env node\n' +
+      'require("fs").appendFileSync(process.env.OMC_FAKE_GIT_LOG, process.argv.slice(2).join(" ") + "\\n");\n' +
+      'process.exit(1);\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(fakeBinDir, 'git.cmd'),
+      '@echo off\r\nnode "%~dp0\\git" %*\r\n',
+    );
+
+    const out = runContextGuardStopWithEnv(
+      {
+        session_id: `session-${Date.now()}`,
+        transcript_path: missingTranscriptPath,
+        cwd: tempDir,
+        stop_reason: 'normal',
+      },
+      {
+        PATH: `${fakeBinDir}${delimiter}${process.env.PATH ?? ''}`,
+        OMC_FAKE_GIT_LOG: gitLogPath,
+      },
+    );
+
+    expect(out).toEqual({ continue: true, suppressOutput: true });
+    expect(() => readFileSync(gitLogPath, 'utf-8')).toThrow();
   });
 });

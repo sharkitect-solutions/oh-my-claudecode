@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
@@ -85,9 +85,10 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
   });
 
   it('falls back to latest version when target version is missing', () => {
+    const markerPath = join(tmpDir, 'hook-ok.txt');
     // Create a valid latest version with the target script
     const _latestDir = createFakeVersion('4.4.5', {
-      'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("hook-ok"); process.exit(0);',
+      'test-hook.cjs': `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(markerPath)}, "hook-ok"); process.exit(0);`,
     });
 
     // Target points to a non-existent old version
@@ -100,16 +101,17 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
 
     // Should find the script in 4.4.5 and run it successfully
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('hook-ok');
+    expect(readFileSync(markerPath, 'utf-8')).toBe('hook-ok');
   });
 
   it('falls back to latest version when multiple versions exist', () => {
+    const markerPath = join(tmpDir, 'version-picked.txt');
     // Create two valid versions
     createFakeVersion('4.4.3', {
-      'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("from-4.4.3"); process.exit(0);',
+      'test-hook.cjs': `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(markerPath)}, "from-4.4.3"); process.exit(0);`,
     });
     createFakeVersion('4.4.5', {
-      'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("from-4.4.5"); process.exit(0);',
+      'test-hook.cjs': `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(markerPath)}, "from-4.4.5"); process.exit(0);`,
     });
 
     // Target points to a deleted old version
@@ -122,13 +124,14 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
 
     // Should pick the highest version (4.4.5)
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('from-4.4.5');
+    expect(readFileSync(markerPath, 'utf-8')).toBe('from-4.4.5');
   });
 
   it('resolves target through symlinked version directory', () => {
+    const markerPath = join(tmpDir, 'symlink-hit.txt');
     // Create a real latest version
     const _latestDir = createFakeVersion('4.4.5', {
-      'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("via-symlink"); process.exit(0);',
+      'test-hook.cjs': `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(markerPath)}, "via-symlink"); process.exit(0);`,
     });
 
     // Create a symlink from old version to latest
@@ -143,12 +146,13 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('via-symlink');
+    expect(readFileSync(markerPath, 'utf-8')).toBe('via-symlink');
   });
 
   it('runs target normally when path is valid (fast path)', () => {
+    const markerPath = join(tmpDir, 'direct-hit.txt');
     const versionDir = createFakeVersion('4.4.5', {
-      'test-hook.cjs': '#!/usr/bin/env node\nconsole.log("direct-ok"); process.exit(0);',
+      'test-hook.cjs': `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(markerPath)}, "direct-ok"); process.exit(0);`,
     });
 
     const target = join(versionDir, 'scripts', 'test-hook.cjs');
@@ -158,7 +162,7 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('direct-ok');
+    expect(readFileSync(markerPath, 'utf-8')).toBe('direct-ok');
   });
 
   it('exits 0 when no CLAUDE_PLUGIN_ROOT is set and target is missing', () => {
@@ -196,5 +200,48 @@ describe('run.cjs — graceful fallback for stale plugin paths', () => {
 
     // No version has test-hook.cjs, so exit 0 gracefully
     expect(result.status).toBe(0);
+  });
+
+  it('honors hooks.json timeouts so wrapped hooks fail open instead of blocking', () => {
+    const pluginRoot = join(tmpDir, 'plugin-root');
+    const scriptsDir = join(pluginRoot, 'scripts');
+    const hooksDir = join(pluginRoot, 'hooks');
+    mkdirSync(scriptsDir, { recursive: true });
+    mkdirSync(hooksDir, { recursive: true });
+
+    const slowTarget = join(scriptsDir, 'slow-stop-hook.cjs');
+    writeFileSync(
+      slowTarget,
+      'setTimeout(() => { process.stdout.write("slow-stop-done\\n"); process.exit(0); }, 3000);',
+    );
+    writeFileSync(
+      join(hooksDir, 'hooks.json'),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            {
+              matcher: '',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/slow-stop-hook.cjs',
+                  timeout: 1,
+                },
+              ],
+            },
+          ],
+        },
+      }, null, 2),
+    );
+
+    const startedAt = Date.now();
+    const result = runCjs(slowTarget, {
+      CLAUDE_PLUGIN_ROOT: pluginRoot,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('slow-stop-done');
+    expect(elapsedMs).toBeLessThan(2500);
   });
 });
