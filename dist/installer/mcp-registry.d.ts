@@ -3,7 +3,6 @@ export interface UnifiedMcpRegistryEntry {
     args?: string[];
     env?: Record<string, string>;
     url?: string;
-    type?: string;
     timeout?: number;
 }
 export type UnifiedMcpRegistry = Record<string, UnifiedMcpRegistryEntry>;

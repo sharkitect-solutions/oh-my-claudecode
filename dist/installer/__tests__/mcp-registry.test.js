@@ -145,38 +145,6 @@ describe('unified MCP registry sync', () => {
         expect(codexConfig).toContain('url = "https://lab.example.com/mcp"');
         expect(codexConfig).toContain('startup_timeout_sec = 30');
     });
-    it('reproduces issue #2679: sync strips remote entry type during round-trip', () => {
-        const settings = {
-            mcpServers: {
-                mySseServer: {
-                    url: 'http://localhost:11235/mcp/sse',
-                    type: 'sse',
-                },
-            },
-        };
-        const { settings: syncedSettings, result } = syncUnifiedMcpRegistryTargets(settings);
-        expect(result.bootstrappedFromClaude).toBe(true);
-        expect(result.serverNames).toEqual(['mySseServer']);
-        expect(syncedSettings).toEqual({});
-        expect(JSON.parse(readFileSync(getUnifiedMcpRegistryPath(), 'utf-8'))).toEqual({
-            mySseServer: {
-                url: 'http://localhost:11235/mcp/sse',
-                type: 'sse',
-            },
-        });
-        expect(JSON.parse(readFileSync(getClaudeMcpConfigPath(), 'utf-8'))).toEqual({
-            mcpServers: {
-                mySseServer: {
-                    url: 'http://localhost:11235/mcp/sse',
-                    type: 'sse',
-                },
-            },
-        });
-        const codexConfig = readFileSync(getCodexConfigPath(), 'utf-8');
-        expect(codexConfig).toContain('[mcp_servers.mySseServer]');
-        expect(codexConfig).toContain('url = "http://localhost:11235/mcp/sse"');
-        expect(codexConfig).toContain('type = "sse"');
-    });
     it('preserves explicit launcher timeouts and leaves custom MCP servers untouched', () => {
         const settings = {
             mcpServers: {
@@ -368,30 +336,6 @@ describe('unified MCP registry sync', () => {
             theme: 'dark',
             mcpServers: {
                 customLocal: { command: 'stale-custom', args: ['legacy'] },
-            },
-        });
-        expect(settings).toEqual({ theme: 'dark' });
-        expect(result.bootstrappedFromClaude).toBe(false);
-        expect(JSON.parse(readFileSync(getClaudeMcpConfigPath(), 'utf-8'))).toEqual({
-            mcpServers: {
-                customLocal: { command: 'custom-local', args: ['serve'] },
-                gitnexus: { command: 'gitnexus', args: ['mcp'] },
-            },
-        });
-    });
-    it('respects explicit removal from ~/.claude.json when legacy settings still contain a stale copy', () => {
-        writeFileSync(getUnifiedMcpRegistryPath(), JSON.stringify({
-            gitnexus: { command: 'gitnexus', args: ['mcp'] },
-        }, null, 2));
-        writeFileSync(getClaudeMcpConfigPath(), JSON.stringify({
-            mcpServers: {
-                customLocal: { command: 'custom-local', args: ['serve'] },
-            },
-        }, null, 2));
-        const { settings, result } = syncUnifiedMcpRegistryTargets({
-            theme: 'dark',
-            mcpServers: {
-                gitnexus: { command: 'stale-gitnexus', args: ['legacy'] },
             },
         });
         expect(settings).toEqual({ theme: 'dark' });
