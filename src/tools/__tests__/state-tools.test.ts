@@ -749,6 +749,33 @@ describe('state-tools', () => {
       expect(result.content[0].text).toContain('recovered session file');
       expect(existsSync(join(strandedDir, 'ralph-state.json'))).toBe(false);
     });
+
+    it('should clear the owning session when the current session resumed ralph from a different conversation', async () => {
+      const currentSessionId = 'resume-session-b';
+      const ownerSessionId = 'resume-session-a';
+      const ownerDir = join(TEST_DIR, '.omc', 'state', 'sessions', ownerSessionId);
+      mkdirSync(ownerDir, { recursive: true });
+      writeFileSync(
+        join(ownerDir, 'ralph-state.json'),
+        JSON.stringify({
+          active: true,
+          session_id: ownerSessionId,
+          iteration: 4,
+          linked_ultrawork: true,
+        }),
+      );
+
+      const result = await stateClearTool.handler({
+        mode: 'ralph',
+        session_id: currentSessionId,
+        workingDirectory: TEST_DIR,
+      });
+
+      expect(result.content[0].text).toContain(`cleared owning session: ${ownerSessionId}`);
+      expect(existsSync(join(ownerDir, 'ralph-state.json'))).toBe(false);
+      expect(existsSync(join(TEST_DIR, '.omc', 'state', 'sessions', currentSessionId, 'cancel-signal-state.json'))).toBe(true);
+      expect(existsSync(join(ownerDir, 'cancel-signal-state.json'))).toBe(true);
+    });
   });
 
   describe('session-scoped behavior', () => {
