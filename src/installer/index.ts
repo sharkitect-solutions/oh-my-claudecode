@@ -26,6 +26,7 @@ import { isSkininthegamebrosUser } from '../utils/skininthegamebros-user.js';
 import { syncUnifiedMcpRegistryTargets } from './mcp-registry.js';
 import { OMC_CONFIG_FILE_REL } from '../lib/paths.js';
 import { buildHudWrapper } from '../lib/hud-wrapper-template.js';
+import { syncOmcLearnedUserSkillsForClaudeCode } from '../utils/user-skill-compat.js';
 
 /** Claude Code configuration directory */
 export const CLAUDE_CONFIG_DIR = getClaudeConfigDir();
@@ -1385,6 +1386,16 @@ function syncBundledSkillDefinitions(log: (msg: string) => void, options?: { saf
   return installedSkills;
 }
 
+function syncUserSkillCompatShims(log: (msg: string) => void): string[] {
+  const synced = syncOmcLearnedUserSkillsForClaudeCode();
+
+  for (const skillName of synced) {
+    log(`  Synced user skill compatibility shim: ${join(skillName, 'SKILL.md').replace(/\\/g, '/')}`);
+  }
+
+  return synced;
+}
+
 function loadClaudeMdContent(): string {
   const claudeMdPath = join(getPackageDir(), 'docs', 'CLAUDE.md');
 
@@ -1773,6 +1784,13 @@ export function install(options: InstallOptions = {}): InstallResult {
       const removedSkills = cleanupStaleSkills(log);
       if (removedSkills.length > 0) {
         log(`Cleaned up ${removedSkills.length} stale skill(s)`);
+      }
+    }
+
+    if (existsSync(SKILLS_DIR)) {
+      const syncedUserSkillCompat = syncUserSkillCompatShims(log);
+      if (syncedUserSkillCompat.length > 0) {
+        log(`Synced ${syncedUserSkillCompat.length} user skill compatibility shim(s)`);
       }
     }
 
