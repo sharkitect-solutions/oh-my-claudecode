@@ -31,7 +31,7 @@ import { buildWorkerArgv, getContract, resolveValidatedBinaryPath, getWorkerEnv 
 import { createTeamSession, spawnWorkerInPane, sendToWorker, waitForPaneReady, paneHasActiveTask, paneLooksReady, applyMainVerticalLayout, } from './tmux-session.js';
 import { composeInitialInbox, ensureWorkerStateDir, writeWorkerOverlay, generateTriggerMessage, generatePromptModeStartupPrompt, } from './worker-bootstrap.js';
 import { queueInboxInstruction } from './mcp-comm.js';
-import { cleanupTeamWorktrees, ensureWorkerWorktree, installWorktreeRootAgents, normalizeTeamWorktreeMode } from './git-worktree.js';
+import { cleanupTeamWorktrees, ensureWorkerWorktree, installWorktreeRootAgents, normalizeTeamWorktreeMode, } from './git-worktree.js';
 import { formatOmcCliInvocation } from '../utils/omc-cli-rendering.js';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
 import { CANONICAL_TEAM_ROLES } from '../shared/types.js';
@@ -577,7 +577,8 @@ export async function startTeamV2(config) {
         });
         const worktree = workerWorktrees.get(wName);
         if (worktree) {
-            installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, await readFile(overlayPath, 'utf-8'));
+            const overlayContent = await readFile(overlayPath, 'utf-8');
+            installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, overlayContent);
         }
     }
     // Create tmux session (leader only — workers spawned below)

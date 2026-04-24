@@ -30218,91 +30218,75 @@ function getLegacyMetadataPath(repoRoot, teamName) {
 function getWorkerStateDir(repoRoot, teamName, workerName2) {
   return (0, import_node_path7.join)(repoRoot, ".omc", "state", "team", sanitizeName(teamName), "workers", sanitizeName(workerName2));
 }
-function getAgentsRecordPath(repoRoot, teamName, workerName2) {
+function getRootAgentsBackupPath(repoRoot, teamName, workerName2) {
   return (0, import_node_path7.join)(getWorkerStateDir(repoRoot, teamName, workerName2), "worktree-root-agents.json");
 }
-function getAgentsBackupPath(repoRoot, teamName, workerName2) {
-  return (0, import_node_path7.join)(getWorkerStateDir(repoRoot, teamName, workerName2), "worktree-root-AGENTS.md.backup");
-}
-function hashContent(content) {
-  return (0, import_node_crypto2.createHash)("sha256").update(content).digest("hex");
-}
-function readAgentsRecord(repoRoot, teamName, workerName2) {
-  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName2);
-  if (!(0, import_node_fs6.existsSync)(recordPath)) return null;
+function readRootAgentsBackup(repoRoot, teamName, workerName2) {
+  const backupPath = getRootAgentsBackupPath(repoRoot, teamName, workerName2);
+  if (!(0, import_node_fs6.existsSync)(backupPath)) return null;
   try {
-    return JSON.parse((0, import_node_fs6.readFileSync)(recordPath, "utf-8"));
-  } catch {
+    return JSON.parse((0, import_node_fs6.readFileSync)(backupPath, "utf-8"));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[omc] warning: worktree root AGENTS backup parse error: ${msg}
+`);
     return null;
   }
 }
-function removeFileIfExists2(path22) {
-  try {
-    if ((0, import_node_fs6.existsSync)(path22)) (0, import_node_fs6.unlinkSync)(path22);
-  } catch {
-  }
-}
-function installWorktreeRootAgents(teamName, workerName2, repoRoot, worktreePath, content) {
+function installWorktreeRootAgents(teamName, workerName2, repoRoot, worktreePath, overlayContent) {
   validateResolvedPath(worktreePath, repoRoot);
   const agentsPath = (0, import_node_path7.join)(worktreePath, "AGENTS.md");
   validateResolvedPath(agentsPath, repoRoot);
-  const stateDir = getWorkerStateDir(repoRoot, teamName, workerName2);
-  ensureDirWithMode(stateDir);
-  const backupPath = getAgentsBackupPath(repoRoot, teamName, workerName2);
-  const recordPath = getAgentsRecordPath(repoRoot, teamName, workerName2);
-  const previous = readAgentsRecord(repoRoot, teamName, workerName2);
-  const currentExists = (0, import_node_fs6.existsSync)(agentsPath);
-  const currentContent = currentExists ? (0, import_node_fs6.readFileSync)(agentsPath, "utf-8") : "";
-  let hadOriginal = currentExists;
-  if (previous) {
-    if (currentExists && hashContent(currentContent) !== previous.installedHash) {
-      const error2 = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
-      error2.code = "worktree_dirty";
-      throw error2;
-    }
-    hadOriginal = previous.hadOriginal;
-  } else if (currentExists) {
-    (0, import_node_fs6.writeFileSync)(backupPath, currentContent, "utf-8");
-  } else {
-    removeFileIfExists2(backupPath);
+  const backupPath = getRootAgentsBackupPath(repoRoot, teamName, workerName2);
+  validateResolvedPath(backupPath, repoRoot);
+  ensureDirWithMode(getWorkerStateDir(repoRoot, teamName, workerName2));
+  const previous = readRootAgentsBackup(repoRoot, teamName, workerName2);
+  const currentContent = (0, import_node_fs6.existsSync)(agentsPath) ? (0, import_node_fs6.readFileSync)(agentsPath, "utf-8") : void 0;
+  if (previous && currentContent !== void 0 && currentContent !== previous.installedContent) {
+    const error2 = new Error(`agents_dirty: preserving modified worktree root AGENTS.md at ${agentsPath}`);
+    error2.code = "agents_dirty";
+    throw error2;
   }
-  (0, import_node_fs6.writeFileSync)(agentsPath, content, "utf-8");
-  atomicWriteJson2(recordPath, {
-    workerName: workerName2,
+  const backup = previous ? { ...previous, worktreePath, installedContent: overlayContent, installedAt: (/* @__PURE__ */ new Date()).toISOString() } : {
     worktreePath,
-    agentsPath,
-    backupPath,
-    hadOriginal,
-    installedHash: hashContent(content),
+    hadOriginal: currentContent !== void 0,
+    ...currentContent !== void 0 ? { originalContent: currentContent } : {},
+    installedContent: overlayContent,
     installedAt: (/* @__PURE__ */ new Date()).toISOString()
-  });
+  };
+  atomicWriteJson2(backupPath, backup);
+  (0, import_node_fs6.writeFileSync)(agentsPath, overlayContent, "utf-8");
 }
 function restoreWorktreeRootAgents(teamName, workerName2, repoRoot, worktreePath) {
-  const record2 = readAgentsRecord(repoRoot, teamName, workerName2);
-  if (!record2) return;
-  validateResolvedPath(worktreePath, repoRoot);
-  const agentsPath = (0, import_node_path7.join)(worktreePath, "AGENTS.md");
+  const backupPath = getRootAgentsBackupPath(repoRoot, teamName, workerName2);
+  validateResolvedPath(backupPath, repoRoot);
+  const backup = readRootAgentsBackup(repoRoot, teamName, workerName2);
+  if (!backup) return { restored: false, reason: "no_backup" };
+  const resolvedWorktreePath = worktreePath ?? backup.worktreePath;
+  validateResolvedPath(resolvedWorktreePath, repoRoot);
+  if (!(0, import_node_fs6.existsSync)(resolvedWorktreePath)) {
+    try {
+      (0, import_node_fs6.unlinkSync)(backupPath);
+    } catch {
+    }
+    return { restored: false, reason: "worktree_missing" };
+  }
+  const agentsPath = (0, import_node_path7.join)(resolvedWorktreePath, "AGENTS.md");
   validateResolvedPath(agentsPath, repoRoot);
-  if ((0, import_node_fs6.existsSync)(agentsPath)) {
-    const current = (0, import_node_fs6.readFileSync)(agentsPath, "utf-8");
-    if (hashContent(current) !== record2.installedHash) {
-      const error2 = new Error(`worktree_dirty: preserving edited worktree-root AGENTS.md at ${agentsPath}`);
-      error2.code = "worktree_dirty";
-      throw error2;
-    }
+  const currentContent = (0, import_node_fs6.existsSync)(agentsPath) ? (0, import_node_fs6.readFileSync)(agentsPath, "utf-8") : void 0;
+  if (currentContent !== void 0 && currentContent !== backup.installedContent) {
+    return { restored: false, reason: "agents_dirty" };
   }
-  if (record2.hadOriginal) {
-    if (!(0, import_node_fs6.existsSync)(record2.backupPath)) {
-      const error2 = new Error(`worktree_agents_backup_missing: ${record2.backupPath}`);
-      error2.code = "worktree_agents_backup_missing";
-      throw error2;
-    }
-    (0, import_node_fs6.writeFileSync)(agentsPath, (0, import_node_fs6.readFileSync)(record2.backupPath, "utf-8"), "utf-8");
-  } else {
-    removeFileIfExists2(agentsPath);
+  if (backup.hadOriginal) {
+    (0, import_node_fs6.writeFileSync)(agentsPath, backup.originalContent ?? "", "utf-8");
+  } else if ((0, import_node_fs6.existsSync)(agentsPath)) {
+    (0, import_node_fs6.unlinkSync)(agentsPath);
   }
-  removeFileIfExists2(getAgentsRecordPath(repoRoot, teamName, workerName2));
-  removeFileIfExists2(record2.backupPath);
+  try {
+    (0, import_node_fs6.unlinkSync)(backupPath);
+  } catch {
+  }
+  return { restored: true };
 }
 function readMetadata(repoRoot, teamName) {
   const paths = [getMetadataPath(repoRoot, teamName), getLegacyMetadataPath(repoRoot, teamName)];
@@ -30425,8 +30409,11 @@ function ensureWorkerWorktree(teamName, workerName2, repoRoot, options = {}) {
 function removeWorkerWorktree(teamName, workerName2, repoRoot) {
   const wtPath = getWorktreePath(repoRoot, teamName, workerName2);
   const branch = getBranchName(teamName, workerName2);
-  if ((0, import_node_fs6.existsSync)(wtPath)) {
-    restoreWorktreeRootAgents(teamName, workerName2, repoRoot, wtPath);
+  const agentsRestore = restoreWorktreeRootAgents(teamName, workerName2, repoRoot, wtPath);
+  if (agentsRestore.reason === "agents_dirty") {
+    const error2 = new Error(`agents_dirty: preserving modified worktree root AGENTS.md at ${(0, import_node_path7.join)(wtPath, "AGENTS.md")}`);
+    error2.code = "agents_dirty";
+    throw error2;
   }
   if ((0, import_node_fs6.existsSync)(wtPath) && isWorktreeDirty(wtPath)) {
     const error2 = new Error(`worktree_dirty: preserving dirty worker worktree at ${wtPath}`);
@@ -31383,7 +31370,8 @@ async function startTeamV2(config2) {
     });
     const worktree = workerWorktrees.get(wName);
     if (worktree) {
-      installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, await (0, import_promises13.readFile)(overlayPath, "utf-8"));
+      const overlayContent = await (0, import_promises13.readFile)(overlayPath, "utf-8");
+      installWorktreeRootAgents(sanitized, wName, leaderCwd, worktree.path, overlayContent);
     }
   }
   const session = await createTeamSession(sanitized, 0, leaderCwd, {

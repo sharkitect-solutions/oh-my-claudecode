@@ -30,18 +30,27 @@ export interface CleanupTeamWorktreesResult {
         reason: string;
     }>;
 }
+export interface WorktreeRootAgentsRestoreResult {
+    restored: boolean;
+    reason?: string;
+}
 /** Get canonical native team worktree path for a worker. */
 export declare function getWorktreePath(repoRoot: string, teamName: string, workerName: string): string;
 /** Get branch name for a worker. */
 export declare function getBranchName(teamName: string, workerName: string): string;
 /**
- * Install the worker overlay into the worktree root so Codex/Claude sees the
- * team contract through normal AGENTS.md discovery. Existing root instructions
- * are backed up under leader-owned state and restored by cleanup when unchanged.
+ * Install the generated worker overlay into the root of a native worker worktree.
+ * Existing root AGENTS.md content is backed up under leader-owned state so cleanup
+ * can safely restore it. Reinstalling preserves the first original backup instead
+ * of treating an older managed overlay as user content.
  */
-export declare function installWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath: string, content: string): void;
-/** Restore or remove a managed worktree-root AGENTS.md before worktree cleanup. */
-export declare function restoreWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath: string): void;
+export declare function installWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath: string, overlayContent: string): void;
+/**
+ * Restore or remove a managed worktree-root AGENTS.md when it is still unchanged.
+ * If a worker edited AGENTS.md, leave it and report agents_dirty so cleanup can
+ * preserve the worktree instead of overwriting user changes.
+ */
+export declare function restoreWorktreeRootAgents(teamName: string, workerName: string, repoRoot: string, worktreePath?: string): WorktreeRootAgentsRestoreResult;
 export declare function normalizeTeamWorktreeMode(value: unknown): TeamWorktreeMode;
 /**
  * Ensure a worker worktree exists according to the selected opt-in mode.

@@ -10,7 +10,7 @@
  * - 'draining' worker status for graceful transitions during scale_down
  */
 import { resolve } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, readFile } from 'fs/promises';
 import { tmuxExec, tmuxSpawn } from '../cli/tmux-utils.js';
 import { buildWorkerArgv, getWorkerEnv as getModelWorkerEnv, resolveClaudeWorkerModel, } from './model-contract.js';
 import { CANONICAL_TEAM_ROLES } from '../shared/types.js';
@@ -20,7 +20,8 @@ import { teamReadConfig, teamWriteWorkerIdentity, teamReadWorkerStatus, teamAppe
 import { withScalingLock, saveTeamConfig } from './monitor.js';
 import { sanitizeName, isWorkerAlive, killWorkerPanes, buildWorkerStartCommand, waitForPaneReady, } from './tmux-session.js';
 import { TeamPaths, absPath } from './state-paths.js';
-import { ensureWorkerWorktree, removeWorkerWorktree } from './git-worktree.js';
+import { writeWorkerOverlay } from './worker-bootstrap.js';
+import { ensureWorkerWorktree, installWorktreeRootAgents, removeWorkerWorktree, } from './git-worktree.js';
 // ── Environment gate ──────────────────────────────────────────────────────────
 const OMC_TEAM_SCALING_ENABLED_ENV = 'OMC_TEAM_SCALING_ENABLED';
 const CLI_AGENT_TYPES = new Set(['claude', 'codex', 'gemini']);
@@ -228,6 +229,22 @@ export async function scaleUp(teamName, count, agentType, tasks, cwd, env = proc
                 OMC_TEAM_LEADER_CWD: leaderCwd,
                 ...(worktree ? { OMC_TEAM_WORKTREE_PATH: worktree.path, OMC_TEAM_WORKER_CWD: workerCwd } : {}),
             };
+            if (worktree) {
+                const workerOverlayParams = {
+                    teamName: sanitized,
+                    workerName,
+                    agentType: workerAgentType,
+                    tasks: tasks.map((t, idx) => ({
+                        id: String(idx + 1),
+                        subject: t.subject,
+                        description: t.description,
+                    })),
+                    cwd: leaderCwd,
+                };
+                const overlayPath = await writeWorkerOverlay(workerOverlayParams);
+                const overlayContent = await readFile(overlayPath, 'utf-8');
+                installWorktreeRootAgents(sanitized, workerName, leaderCwd, worktree.path, overlayContent);
+            }
             let cmd;
             try {
                 cmd = buildWorkerStartCommand({
@@ -421,6 +438,15 @@ export async function scaleDown(teamName, cwd, options = {}, env = process.env) 
             cwd: leaderCwd,
         });
         for (const w of targetWorkers) {
+            if (w.worktree_created) {
+                try {
+                    removeWorkerWorktree(sanitized, w.name, leaderCwd);
+                }
+                catch (err) {
+                    const reason = err instanceof Error ? err.message : String(err);
+                    return { ok: false, error: `Failed to remove worktree for ${w.name}: ${reason}` };
+                }
+            }
             removedNames.push(w.name);
         }
         // Phase 4: Update config
