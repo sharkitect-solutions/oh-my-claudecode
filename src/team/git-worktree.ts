@@ -20,7 +20,7 @@ import { atomicWriteJson, ensureDirWithMode, validateResolvedPath } from './fs-u
 import { sanitizeName } from './tmux-session.js';
 import { withFileLockSync } from '../lib/file-lock.js';
 
-export type TeamWorktreeMode = 'disabled' | 'detached' | 'branch';
+export type TeamWorktreeMode = 'disabled' | 'detached' | 'named';
 
 export interface WorktreeInfo {
   path: string;
@@ -85,54 +85,24 @@ function assertCleanLeaderWorktree(repoRoot: string): void {
   }
 }
 
-function isRegisteredWorktreePath(repoRoot: string, wtPath: string): boolean {
+function getRegisteredWorktreeBranch(repoRoot: string, wtPath: string): string | undefined {
   try {
     const output = git(repoRoot, ['worktree', 'list', '--porcelain']);
     const resolvedWtPath = resolve(wtPath);
+    let currentMatches = false;
     for (const line of output.split('\n')) {
-      if (!line.startsWith('worktree ')) continue;
-      if (resolve(line.slice('worktree '.length).trim()) === resolvedWtPath) {
-        return true;
+      if (line.startsWith('worktree ')) {
+        currentMatches = resolve(line.slice('worktree '.length).trim()) === resolvedWtPath;
+        continue;
       }
+      if (!currentMatches) continue;
+      if (line.startsWith('branch ')) return line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+      if (line === 'detached') return 'HEAD';
     }
   } catch {
     // Best-effort check only.
   }
   return undefined;
-}
-
-function isWorktreeDirty(wtPath: string): boolean {
-  try {
-    return git(wtPath, ['status', '--porcelain'], wtPath).length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function currentBranch(wtPath: string): string {
-  try {
-    return git(wtPath, ['rev-parse', '--abbrev-ref', 'HEAD'], wtPath);
-  } catch {
-    return '';
-  }
-}
-
-function isDetached(wtPath: string): boolean {
-  return currentBranch(wtPath) === 'HEAD';
-}
-
-function isRegisteredWorktreePath(repoRoot: string, wtPath: string): boolean {
-  return getRegisteredWorktreeBranch(repoRoot, wtPath) !== undefined;
-}
-
-function isWorktreeDirty(wtPath: string): boolean {
-  try {
-    return JSON.parse(readFileSync(metaPath, 'utf-8')) as WorktreeInfo[];
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[omc] warning: worktrees.json parse error: ${msg}\n`);
-    return [];
-  }
 }
 
 /** Get worktree metadata path. */
@@ -169,8 +139,56 @@ function writeMetadata(repoRoot: string, teamName: string, entries: WorktreeInfo
   atomicWriteJson(metaPath, entries);
 }
 
+function recordMetadata(repoRoot: string, teamName: string, info: WorktreeInfo): void {
+  const metaLockPath = getMetadataPath(repoRoot, teamName) + '.lock';
+  withFileLockSync(metaLockPath, () => {
+    const existing = readMetadata(repoRoot, teamName).filter(entry => entry.workerName !== info.workerName);
+    writeMetadata(repoRoot, teamName, [...existing, info]);
+  });
+}
+
+function forgetMetadata(repoRoot: string, teamName: string, workerName: string): void {
+  const metaLockPath = getMetadataPath(repoRoot, teamName) + '.lock';
+  withFileLockSync(metaLockPath, () => {
+    const existing = readMetadata(repoRoot, teamName).filter(entry => entry.workerName !== workerName);
+    writeMetadata(repoRoot, teamName, existing);
+  });
+}
+
+function assertCompatibleExistingWorktree(
+  repoRoot: string,
+  wtPath: string,
+  expectedBranch: string,
+  mode: TeamWorktreeMode,
+): void {
+  if (isWorktreeDirty(wtPath)) {
+    const error = new Error(`worktree_dirty: preserving dirty worker worktree at ${wtPath}`);
+    (error as Error & { code?: string }).code = 'worktree_dirty';
+    throw error;
+  }
+
+  const registeredBranch = getRegisteredWorktreeBranch(repoRoot, wtPath);
+  if (!registeredBranch) {
+    const error = new Error(`worktree_mismatch: existing path is not a registered git worktree: ${wtPath}`);
+    (error as Error & { code?: string }).code = 'worktree_mismatch';
+    throw error;
+  }
+
+  if (mode === 'named' && registeredBranch !== expectedBranch) {
+    const error = new Error(`worktree_mismatch: expected branch ${expectedBranch} at ${wtPath}, found ${registeredBranch}`);
+    (error as Error & { code?: string }).code = 'worktree_mismatch';
+    throw error;
+  }
+
+  if (mode === 'detached' && registeredBranch !== 'HEAD') {
+    const error = new Error(`worktree_mismatch: expected detached worktree at ${wtPath}, found ${registeredBranch}`);
+    (error as Error & { code?: string }).code = 'worktree_mismatch';
+    throw error;
+  }
+}
+
 function assertLeaderRepoClean(repoRoot: string): void {
-  const status = gitOutput(repoRoot, ['status', '--porcelain'])
+  const status = git(repoRoot, ['status', '--porcelain'])
     .split('\n')
     .filter(line => line.trim() !== '' && !/^\?\? \.omc(?:\/|$)/.test(line))
     .join('\n')
@@ -186,7 +204,7 @@ export function normalizeTeamWorktreeMode(value: unknown): TeamWorktreeMode {
   if (typeof value !== 'string') return 'disabled';
   const normalized = value.trim().toLowerCase();
   if (['1', 'true', 'yes', 'on', 'enabled', 'detached'].includes(normalized)) return 'detached';
-  if (['branch', 'named', 'named-branch'].includes(normalized)) return 'branch';
+  if (['branch', 'named', 'named-branch'].includes(normalized)) return 'named';
   return 'disabled';
 }
 
@@ -212,9 +230,8 @@ export function ensureWorkerWorktree(
   }
 
   const wtPath = getWorktreePath(repoRoot, teamName, workerName);
-  const branch = mode === 'branch' ? getBranchName(teamName, workerName) : 'HEAD';
+  const branch = mode === 'named' ? getBranchName(teamName, workerName) : 'HEAD';
   validateResolvedPath(wtPath, repoRoot);
-  assertLeaderRepoClean(repoRoot);
 
   try {
     execFileSync('git', ['worktree', 'prune'], { cwd: repoRoot, stdio: 'pipe' });
@@ -241,7 +258,7 @@ export function ensureWorkerWorktree(
   const wtDir = join(repoRoot, '.omc', 'team', sanitizeName(teamName), 'worktrees');
   ensureDirWithMode(wtDir);
 
-  const args = mode === 'branch'
+  const args = mode === 'named'
     ? ['worktree', 'add', '-b', branch, wtPath, options.baseRef ?? 'HEAD']
     : ['worktree', 'add', '--detach', wtPath, options.baseRef ?? 'HEAD'];
   execFileSync('git', args, { cwd: repoRoot, stdio: 'pipe' });
@@ -262,7 +279,7 @@ export function ensureWorkerWorktree(
   return info;
 }
 
-/** Legacy creation helper: create or reuse a branch-mode worker worktree. */
+/** Legacy creation helper: create or reuse a named-branch worker worktree. */
 export function createWorkerWorktree(
   teamName: string,
   workerName: string,
@@ -270,7 +287,7 @@ export function createWorkerWorktree(
   baseBranch?: string,
 ): WorktreeInfo {
   const info = ensureWorkerWorktree(teamName, workerName, repoRoot, {
-    mode: 'branch',
+    mode: 'named',
     baseRef: baseBranch,
     requireCleanLeader: false,
   });
@@ -284,7 +301,7 @@ export function removeWorkerWorktree(
   workerName: string,
   repoRoot: string,
 ): void {
-  const wtPath = getWorkerWorktreePath(repoRoot, teamName, workerName);
+  const wtPath = getWorktreePath(repoRoot, teamName, workerName);
   const branch = getBranchName(teamName, workerName);
 
   if (existsSync(wtPath) && isWorktreeDirty(wtPath)) {

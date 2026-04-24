@@ -39,7 +39,7 @@ describe('team summary worktree metadata', () => {
         leader_cwd: cwd,
         team_state_root: teamStateRoot,
         workspace_mode: 'worktree',
-        worktree_mode: 'branch',
+        worktree_mode: 'named',
         leader_pane_id: null,
         hud_pane_id: null,
         resize_hook_name: null,
@@ -49,7 +49,7 @@ describe('team summary worktree metadata', () => {
       const summary = await getTeamSummary(teamName, cwd);
 
       expect(summary?.workspace_mode).toBe('worktree');
-      expect(summary?.worktree_mode).toBe('branch');
+      expect(summary?.worktree_mode).toBe('named');
       expect(summary?.team_state_root).toBe(teamStateRoot);
       expect(summary?.workers[0]).toMatchObject({
         working_dir: worktreePath,
